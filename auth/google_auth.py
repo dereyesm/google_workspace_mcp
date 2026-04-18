@@ -111,6 +111,18 @@ def _find_any_credentials(
             )
             return None, None
 
+        declared_email = os.getenv("USER_GOOGLE_EMAIL")
+        if len(users) > 1 and declared_email:
+            logger.warning(
+                "[single-user] USER_GOOGLE_EMAIL=%s is set but credential store "
+                "contains %d users (%s). Returning the first sorted entry; this path "
+                "should only be reached when no specific email was requested. "
+                "Review the credentials directory to avoid identity ambiguity.",
+                declared_email,
+                len(users),
+                ", ".join(users),
+            )
+
         # Return credentials for the first user found
         first_user = users[0]
         credentials = store.get_credential(first_user)
@@ -879,8 +891,11 @@ def get_credentials(
         logger.info(
             "[get_credentials] Single-user mode: bypassing session mapping, finding any credentials"
         )
-        # If a specific email was requested, try to load that user's credentials first
-        # to avoid session binding conflicts when multiple credential files exist
+        # If a specific email was requested, load that user's credentials only.
+        # Do NOT fall back to _find_any_credentials when a specific email was asked
+        # for: serving a different identity than the one requested is an identity
+        # scoping violation (even in single-user mode) and has caused confidential
+        # drafts to be written under the wrong account. Let the caller re-authenticate.
         if user_google_email:
             credential_store = get_credential_store()
             credentials = credential_store.get_credential(user_google_email)
@@ -890,12 +905,12 @@ def get_credentials(
                 )
                 found_user_email = user_google_email
             else:
-                logger.info(
-                    f"[get_credentials] Single-user mode: no credentials for {user_google_email}, falling back to any"
+                logger.error(
+                    f"[get_credentials] Single-user mode: no credentials for requested user "
+                    f"{user_google_email}. Refusing to fall back to any-credential lookup "
+                    f"(identity scoping enforcement). Re-authenticate this user."
                 )
-                credentials, found_user_email = _find_any_credentials(
-                    credentials_base_dir
-                )
+                return None
         else:
             credentials, found_user_email = _find_any_credentials(credentials_base_dir)
         if not credentials:
