@@ -227,19 +227,40 @@ class LocalDirectoryCredentialStore(CredentialStore):
             return False
 
     def list_users(self) -> List[str]:
-        """List all users with credential files."""
+        """List all users with credential files.
+
+        Accepts only files matching the strict pattern ``<email>.json``. Files
+        with additional suffixes commonly used as human-facing "parked" markers
+        (``.disabled``, ``.bak``, ``.bak*``, ``.old``, ``.backup``, ``.parked``)
+        are rejected and logged as a warning so that credentials intended to
+        be inactive cannot be picked up as live identities.
+        """
         if not os.path.exists(self.base_dir):
             return []
 
-        users = []
-        non_credential_files = {"oauth_states"}
+        credential_pattern = re.compile(r"^[^@/\s]+@[^@/\s]+\.json$")
+        parked_suffix_pattern = re.compile(
+            r"\.json\.(disabled|bak\d*|old|backup|parked)$"
+        )
+
+        users: List[str] = []
+        parked_files: List[str] = []
         try:
             for filename in os.listdir(self.base_dir):
-                if filename.endswith(".json"):
-                    user_email = filename[:-5]  # Remove .json extension
-                    if user_email in non_credential_files or "@" not in user_email:
-                        continue
-                    users.append(user_email)
+                if credential_pattern.match(filename):
+                    users.append(filename[:-5])  # Strip .json
+                elif parked_suffix_pattern.search(filename):
+                    parked_files.append(filename)
+
+            if parked_files:
+                logger.warning(
+                    "[credential_store] Ignoring %d parked credential file(s) in %s: %s. "
+                    "These are not loaded as identities; move them outside the credentials "
+                    "directory if they should be retained.",
+                    len(parked_files),
+                    self.base_dir,
+                    ", ".join(sorted(parked_files)),
+                )
             logger.debug(
                 f"Found {len(users)} users with credentials in {self.base_dir}"
             )
